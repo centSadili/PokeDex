@@ -1,6 +1,6 @@
 import axios from "axios";
 import React, { useEffect, useState } from "react";
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 const PokemonDetails = (props) => {
   const { url } = props.route.params;
@@ -10,14 +10,13 @@ const PokemonDetails = (props) => {
     types: [],
   });
   useEffect(() => {
-    axios.get(`${url}`)
-    .then((reponse) => {
+    axios.get(`${url}`).then((reponse) => {
       setPokemon(reponse.data);
     });
   }, []);
-  const bgColor = () => {
+  const bgColor = (index) => {
     if (getPokemon.types.length > 0) {
-      switch (getPokemon.types[0].type.name) {
+      switch (getPokemon.types[index || 0].type.name) {
         case "normal":
           return "#A8A77A";
         case "fire":
@@ -55,26 +54,52 @@ const PokemonDetails = (props) => {
         case "fairy":
           return "#D685AD";
         default:
-          return "gray"; // Default color if type is unknown
+          return "gray";
       }
     }
     return "gray";
   };
   return (
-    <View style={[style.container, { backgroundColor: bgColor() }]}>
-      <View style={style.imageContainer}>
+    <View style={[style.container]}>
+      <View style={[style.imageContainer, { backgroundColor: bgColor() }]}>
         <Image
           source={{ uri: getPokemon.sprites.front_default }}
           style={{ width: 200, height: 200 }}
           resizeMode="contain"
         />
       </View>
-
-      <Text style={style.textName}>{getPokemon.name}</Text>
       <View>
-        {getPokemon.types.map((item, index) => {
-          return <Text style={style.textType} key={index}>{item.type.name}</Text>;
-        })}
+        <Text style={style.textName}>{getPokemon.name}</Text>
+        <View style={style.typesContainer}>
+          {getPokemon.types.map((item, index) => {
+            return (
+              <TouchableOpacity
+                style={[
+                  style.typeContainer,
+                  { backgroundColor: bgColor(index) },
+                ]}
+              >
+                <Text style={style.textType} key={index}>
+                  {item.type.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <View style={style.typesContainer}>
+          <View>
+            <Text style={style.textType}>
+              {(getPokemon.height * 0.1).toFixed(2)} m
+            </Text>
+            <Text style={style.textType}>height</Text>
+          </View>
+          <View>
+            <Text style={style.textType}>
+              {(getPokemon.weight * 0.1).toFixed(2)} kg
+            </Text>
+            <Text style={style.textType}>weight</Text>
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -83,22 +108,42 @@ const style = StyleSheet.create({
   container: {
     justifyContent: "space-evenly",
     alignItems: "center",
-    borderWidth: 1,
-    borderRadius: 5,
-    margin: 5,
+    backgroundColor: "black",
+    margin: 0,
+    padding: 0,
   },
   imageContainer: {
+    alignItems: "center",
+    width: "100%",
     borderWidth: 1,
-    borderRadius: 5,
+    borderBottomEndRadius: 50,
+    borderBottomStartRadius: 50,
     margin: 5,
+  },
+  typesContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 20,
+  },
+  typeContainer: {
+    height: 30,
+    width: 50,
+    margin: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "red",
+    borderRadius: 10,
   },
   textName: {
     fontWeight: "bold",
     textTransform: "capitalize",
     textAlign: "center",
+    color: "white",
   },
   textType: {
     textAlign: "center",
+    color: "white",
   },
 });
 export default PokemonDetails;

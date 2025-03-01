@@ -99,6 +99,7 @@ const style = StyleSheet.create({
     backgroundColor: "white",
     borderWidth: 1,
     borderRadius: 5,
+    paddingLeft: 5,
     height:'60%',
     width:'100%'
   },

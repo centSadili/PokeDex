@@ -67,7 +67,7 @@ const style = StyleSheet.create({
     flexGrow: 5,
     borderWidth: 1,
     borderRadius: 5,
-    backgroundColor: "white",
+    backgroundColor: "black",
   },
   header: {
     alignItems: "center",
@@ -77,6 +77,7 @@ const style = StyleSheet.create({
     fontSize: 24,
     fontWeight: "bold",
     marginBottom: 10,
+    color:'#F7D02C'
   },
   input: {
     width: "90%",
