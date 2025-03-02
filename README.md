@@ -1,1 +1,2 @@
 # PokeDex
+API Pratice Purposes
