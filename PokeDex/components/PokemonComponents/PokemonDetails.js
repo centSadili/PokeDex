@@ -74,6 +74,7 @@ const PokemonDetails = (props) => {
           {getPokemon.types.map((item, index) => {
             return (
               <TouchableOpacity
+                key={index}
                 style={[
                   style.typeContainer,
                   { backgroundColor: bgColor(index) },
