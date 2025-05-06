@@ -1,4 +1,2 @@
 # PokeDex
-API Pratice Purpose
-WITH 3D model rendered
-have some error
+A Pokédex is a digital encyclopedia in the Pokémon universe that provides information about all known Pokémon species.
