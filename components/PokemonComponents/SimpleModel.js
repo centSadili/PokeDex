@@ -3,11 +3,13 @@ import React, { useState, useRef, useEffect } from "react";
 import { useGLTF } from "@react-three/drei/native";
 import { useFrame } from "@react-three/fiber/native";
 import * as THREE from 'three';
+import { Asset } from 'expo-asset';
+
 
 function SimpleModel({ onLoad }) {
   // Load the model - ensure path is correct
-  const modelPath = require("../../assets/models/Dental_Model_Mobile.glb");
-  const { scene } = useGLTF(modelPath);
+  const modelPath = Asset.fromModule(require("../../assets/models/Dental_Model_Mobile.glb"));
+  const { scene } = useGLTF(modelPath.uri);
   
   // Track click states for all meshes
   const [clickStates, setClickStates] = useState({});
@@ -134,10 +136,10 @@ function SimpleModel({ onLoad }) {
 }
 
 // Preload the model to improve performance
-try {
-  useGLTF.preload(require("../../assets/models/Dental_Model_Mobile.glb"));
-} catch (error) {
-  console.error("Error preloading model:", error);
-}
+// try {
+//   useGLTF.preload(require("../../assets/models/Dental_Model_Mobile.glb"));
+// } catch (error) {
+//   console.error("Error preloading model:", error);
+// }
 
 export default SimpleModel;
