@@ -45,10 +45,10 @@ export default function TeethModelViewer() {
     const step = Math.PI / 36; // 5 degrees in radians
 
     switch (direction) {
-      case "left":
+      case "right":
         setAzimuth((prev) => prev - step); // Rotate left
         break;
-      case "right":
+      case "left":
         setAzimuth((prev) => prev + step); // Rotate right
         break;
       case "up":
