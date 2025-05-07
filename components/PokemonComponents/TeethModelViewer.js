@@ -1,12 +1,12 @@
-// src/screens/TeethModelViewer.js
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useCallback } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber/native";
-import { View, StyleSheet, TouchableOpacity, Text } from "react-native";
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator } from "react-native";
 import { Vector3 } from "three";
 
-// Import SimpleModel from the new file
-import SimpleModel from "./SimpleModel"; // Adjust the import path accordingly
+// Import SimpleModel component
+import SimpleModel from "./SimpleModel"; // Make sure this path is correct
 
+// Camera controller component - handles the orbit camera functionality
 function OrbitCameraController({ azimuth, elevation, radius }) {
   const { camera } = useThree();
 
@@ -23,10 +23,22 @@ function OrbitCameraController({ azimuth, elevation, radius }) {
   return null;
 }
 
+// Loading indicator component for Suspense fallback
+function LoadingIndicator() {
+  return (
+    <View style={styles.loadingContainer}>
+      <ActivityIndicator size="large" color="#0000ff" />
+      <Text style={styles.loadingText}>Loading dental model...</Text>
+    </View>
+  );
+}
+
 export default function TeethModelViewer() {
   const [azimuth, setAzimuth] = useState(0); // Horizontal rotation
   const [elevation, setElevation] = useState(Math.PI / 4); // Vertical angle
   const [radius, setRadius] = useState(5); // Camera distance (zoom)
+  const [modelLoaded, setModelLoaded] = useState(false);
+  const [error, setError] = useState(null);
 
   // This function rotates the camera based on direction (left, right, up, down)
   const rotateCamera = (direction) => {
@@ -52,55 +64,111 @@ export default function TeethModelViewer() {
   const zoomIn = () => setRadius((prev) => Math.max(1, prev - 0.5)); // Limit to minimum radius
   const zoomOut = () => setRadius((prev) => prev + 0.5); // Increase radius
 
+  // Function to handle model load completion
+  const handleModelLoaded = useCallback(() => {
+    setModelLoaded(true);
+    console.log("Model loaded successfully");
+  }, []);
+
+  // Function to handle errors
+  const handleError = useCallback((err) => {
+    console.error("Error in 3D View:", err);
+    setError(err.message || "Failed to load 3D model");
+  }, []);
+
   return (
     <View style={styles.container}>
       {/* Canvas for 3D Model */}
-      <Canvas style={styles.canvas}>
+      <Canvas 
+        style={styles.canvas}
+        onCreated={({ gl }) => {
+          console.log("Canvas created successfully");
+        }}
+        onError={handleError}
+      >
+        {/* Lighting */}
         <ambientLight intensity={0.5} />
         <directionalLight position={[2, 2, 5]} intensity={1} />
+        <spotLight position={[0, 5, 10]} angle={0.3} penumbra={1} intensity={1} castShadow />
+        
+        {/* Camera Controller */}
         <OrbitCameraController azimuth={azimuth} elevation={elevation} radius={radius} />
+        
+        {/* 3D Model */}
         <Suspense fallback={null}>
-          <SimpleModel /> {/* Render SimpleModel */}
+          <SimpleModel onLoad={handleModelLoaded} />
         </Suspense>
       </Canvas>
 
-      {/* UI controls outside the Canvas */}
-      <View style={styles.dpad}>
-        <TouchableOpacity
-          onPressIn={() => rotateCamera("up")}
-          style={styles.btn}
-        >
-          <Text>↑</Text>
-        </TouchableOpacity>
-        <View style={styles.horizontal}>
-          <TouchableOpacity
-            onPressIn={() => rotateCamera("right")}
-            style={styles.btn}
+      {/* Loading indicator */}
+      {!modelLoaded && !error && <LoadingIndicator />}
+      
+      {/* Error message */}
+      {error && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Error: {error}</Text>
+          <TouchableOpacity 
+            style={styles.retryButton}
+            onPress={() => {
+              setError(null);
+              setModelLoaded(false);
+              // This forces a re-render which will reload the model
+            }}
           >
-            <Text>←</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPressIn={() => rotateCamera("left")}
-            style={styles.btn}
-          >
-            <Text>→</Text>
+            <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          onPressIn={() => rotateCamera("down")}
-          style={styles.btn}
-        >
-          <Text>↓</Text>
-        </TouchableOpacity>
+      )}
+
+      {/* UI controls outside the Canvas */}
+      <View style={styles.controls}>
+        {/* D-pad for rotation */}
+        <View style={styles.dpad}>
+          <TouchableOpacity
+            onPressIn={() => rotateCamera("up")}
+            style={styles.btn}
+          >
+            <Text style={styles.btnText}>↑</Text>
+          </TouchableOpacity>
+          <View style={styles.horizontal}>
+            <TouchableOpacity
+              onPressIn={() => rotateCamera("left")}
+              style={styles.btn}
+            >
+              <Text style={styles.btnText}>←</Text>
+            </TouchableOpacity>
+            <View style={styles.centerBtn} />
+            <TouchableOpacity
+              onPressIn={() => rotateCamera("right")}
+              style={styles.btn}
+            >
+              <Text style={styles.btnText}>→</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity
+            onPressIn={() => rotateCamera("down")}
+            style={styles.btn}
+          >
+            <Text style={styles.btnText}>↓</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Zoom controls */}
+        <View style={styles.zoomControls}>
+          <TouchableOpacity onPress={zoomIn} style={styles.zoomBtn}>
+            <Text style={styles.btnText}>+</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={zoomOut} style={styles.zoomBtn}>
+            <Text style={styles.btnText}>-</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <View style={styles.zoomControls}>
-        <TouchableOpacity onPress={zoomIn} style={styles.btn}>
-          <Text>Zoom In</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={zoomOut} style={styles.btn}>
-          <Text>Zoom Out</Text>
-        </TouchableOpacity>
+      {/* Instructions */}
+      <View style={styles.instructions}>
+        <Text style={styles.instructionText}>
+          Tap on T11_labial tooth to change its color
+        </Text>
       </View>
     </View>
   );
@@ -109,30 +177,112 @@ export default function TeethModelViewer() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: "#f5f5f5",
   },
   canvas: {
     flex: 1,
   },
-  dpad: {
+  loadingContainer: {
     position: "absolute",
-    bottom: 100,
-    alignSelf: "center",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+  },
+  controls: {
+    position: "absolute",
+    bottom: 20,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+  },
+  dpad: {
     alignItems: "center",
   },
   horizontal: {
     flexDirection: "row",
-    marginVertical: 5,
+    alignItems: "center",
+  },
+  centerBtn: {
+    width: 40,
+    height: 40,
   },
   btn: {
-    backgroundColor: "#ddd",
-    padding: 10,
+    backgroundColor: "rgba(200, 200, 200, 0.8)",
+    padding: 15,
     margin: 5,
-    borderRadius: 5,
+    borderRadius: 10,
+    width: 50,
+    height: 50,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  btnText: {
+    fontSize: 18,
+    fontWeight: "bold",
   },
   zoomControls: {
-    position: "absolute",
-    bottom: 40,
-    left: 20,
+    justifyContent: "center",
+  },
+  zoomBtn: {
+    backgroundColor: "rgba(200, 200, 200, 0.8)",
+    padding: 15,
+    margin: 5,
+    borderRadius: 10,
+    width: 50,
+    height: 50,
+    justifyContent: "center",
     alignItems: "center",
+  },
+  instructions: {
+    position: "absolute",
+    top: 20,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    padding: 10,
+  },
+  instructionText: {
+    backgroundColor: "rgba(255, 255, 255, 0.7)",
+    padding: 10,
+    borderRadius: 5,
+    fontSize: 16,
+  },
+  errorContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.9)",
+  },
+  errorText: {
+    color: "red",
+    fontSize: 18,
+    marginBottom: 15,
+    textAlign: "center",
+    padding: 10,
+  },
+  retryButton: {
+    backgroundColor: "#2196F3",
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
+  },
+  retryButtonText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "bold",
   },
 });
