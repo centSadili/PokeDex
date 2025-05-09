@@ -33,6 +33,7 @@ export const processTeethSelections = (clickStates, interactiveParts) => {
   // Use Sets for faster lookup and unique values
   const redTeeth = new Set();
   const blueTeeth = new Set();
+  const blackTeeth = new Set(); // NEW: Add set for black (missing) teeth
   const allTeeth = new Set();
   
   // Reset cache if needed (when selections change dramatically)
@@ -64,6 +65,8 @@ export const processTeethSelections = (clickStates, interactiveParts) => {
         redTeeth.add(baseToothName);
       } else if (color === "blue") {
         blueTeeth.add(baseToothName);
+      } else if (color === "black") { // NEW: Add black teeth to the set
+        blackTeeth.add(baseToothName);
       }
     }
   });
@@ -81,8 +84,8 @@ export const processTeethSelections = (clickStates, interactiveParts) => {
     if (processedBaseNames.has(baseToothName)) continue;
     processedBaseNames.add(baseToothName);
     
-    // Add to unselected if not already in red or blue
-    if (!redTeeth.has(baseToothName) && !blueTeeth.has(baseToothName)) {
+    // Add to unselected if not already in red, blue, or black
+    if (!redTeeth.has(baseToothName) && !blueTeeth.has(baseToothName) && !blackTeeth.has(baseToothName)) {
       unselectedTeeth.add(baseToothName);
     }
   }
@@ -91,6 +94,7 @@ export const processTeethSelections = (clickStates, interactiveParts) => {
   return {
     red: [...redTeeth].sort(),
     blue: [...blueTeeth].sort(),
+    black: [...blackTeeth].sort(), // NEW: Add black teeth to the return object
     unselected: [...unselectedTeeth].sort()
   };
 };
@@ -143,7 +147,7 @@ export const TeethSelectionControls = ({
         // Default behavior if no callback provided
         Alert.alert(
           "Selections Saved",
-          `Red teeth: ${selections.red.join(', ')}\nBlue teeth: ${selections.blue.join(', ')}`,
+          `Red teeth: ${selections.red.join(', ')}\nBlue teeth: ${selections.blue.join(', ')}\nBlack teeth: ${selections.black.join(', ')}`,
           [{ text: "OK" }]
         );
       }

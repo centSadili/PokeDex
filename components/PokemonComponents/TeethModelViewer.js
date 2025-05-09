@@ -6,7 +6,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Import SimpleModel component
 import SimpleModel from "./SimpleModel"; // Make sure this path is correct
-import { TeethSelectionControls } from "./TeethSelectionHandler";
+import { TeethSelectionControls, processTeethSelections } from "./TeethSelectionHandler";
+import TeethConfirmationModal from "./TeethConfirmationModal"; // Import the confirmation modal
 
 // Pre-create rotation step constant for better performance
 const ROTATION_STEP = Math.PI / 36; // 5 degrees in radians
@@ -83,6 +84,10 @@ export default function TeethModelViewer() {
   
   // Track last update time to throttle camera movements
   const lastUpdateTime = useRef(0);
+  
+  // State for confirmation modal
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [currentSelections, setCurrentSelections] = useState(null);
 
   // This function rotates the camera based on direction (including diagonals)
   // Optimized with throttling to prevent excessive updates
@@ -186,26 +191,52 @@ export default function TeethModelViewer() {
     });
   }, []);
 
-  // Handle "Done" button press - save selected teeth
-  const handleSelectionDone = useCallback(async (selections) => {
+  // Initial handler for "Done" button - calculates selections and shows modal
+  const handleSelectionDone = useCallback((selections) => {
+    // Store the selections for the confirmation modal
+    setCurrentSelections(selections);
+    // Show the confirmation modal
+    setConfirmModalVisible(true);
+  }, []);
+
+  // Handle confirm button in modal - save the selections
+  const handleConfirmSelections = useCallback(async () => {
+    if (!currentSelections) return;
+    
     try {
       // Store selections in AsyncStorage
-      await AsyncStorage.setItem('teethSelections', JSON.stringify(selections));
+      await AsyncStorage.setItem('teethSelections', JSON.stringify(currentSelections));
       
+      // Hide the modal
+      setConfirmModalVisible(false);
+      
+      // Show success message
       Alert.alert(
         "Selections Saved",
-        `Red teeth: ${selections.red.join(', ')}\nBlue teeth: ${selections.blue.join(', ')}`,
+        "Your teeth selections have been saved successfully.",
         [{ text: "OK" }]
       );
       
       // You can add navigation here to move to next screen
-      // navigation.navigate('NextScreen', { selections });
+      // navigation.navigate('NextScreen', { selections: currentSelections });
       
-      console.log("Saved teeth selections:", selections);
+      console.log("Saved teeth selections:", currentSelections);
     } catch (e) {
       console.error("Error saving teeth selections:", e);
       Alert.alert("Error", "Failed to save teeth selections. Please try again.");
     }
+  }, [currentSelections]);
+
+  // Handle cancel button in modal
+  const handleCancelSelections = useCallback(() => {
+    setConfirmModalVisible(false);
+    setCurrentSelections(null);
+  }, []);
+
+  // Handle edit button in modal - just close the modal to return to editing
+  const handleEditSelections = useCallback(() => {
+    setConfirmModalVisible(false);
+    // Keep currentSelections for when they finish editing
   }, []);
 
   // Handle retry after error
@@ -219,7 +250,7 @@ export default function TeethModelViewer() {
   const Instructions = useMemo(() => (
     <View style={styles.instructions}>
       <Text style={styles.instructionText}>
-        Tap on teeth to select (red → blue → original). Press Done when finished.
+        Tap on teeth to select (red → blue → black → original). Press Done when finished.
       </Text>
     </View>
   ), []);
@@ -352,6 +383,15 @@ export default function TeethModelViewer() {
 
       {/* Instructions - memoized */}
       {Instructions}
+      
+      {/* Confirmation Modal */}
+      <TeethConfirmationModal
+        visible={confirmModalVisible}
+        selections={currentSelections || {}}
+        onConfirm={handleConfirmSelections}
+        onCancel={handleCancelSelections}
+        onEdit={handleEditSelections}
+      />
     </View>
   );
 }
