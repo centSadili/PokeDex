@@ -1,10 +1,12 @@
-import React, { Suspense, useState, useCallback } from "react";
+import React, { Suspense, useState, useCallback, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber/native";
-import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator } from "react-native";
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert } from "react-native";
 import { Vector3 } from "three";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Import SimpleModel component
 import SimpleModel from "./SimpleModel"; // Make sure this path is correct
+import { TeethSelectionControls } from "./TeethSelectionHandler";
 
 // Camera controller component - handles the orbit camera functionality
 function OrbitCameraController({ azimuth, elevation, radius }) {
@@ -39,6 +41,11 @@ export default function TeethModelViewer() {
   const [radius, setRadius] = useState(5); // Camera distance (zoom)
   const [modelLoaded, setModelLoaded] = useState(false);
   const [error, setError] = useState(null);
+  
+  // Track clicked teeth
+  const [clickStates, setClickStates] = useState({});
+  // Reference to interactive parts in SimpleModel
+  const interactiveRefs = useRef({});
 
   // This function rotates the camera based on direction (left, right, up, down)
   const rotateCamera = (direction) => {
@@ -76,6 +83,56 @@ export default function TeethModelViewer() {
     setError(err.message || "Failed to load 3D model");
   }, []);
 
+  // Store references to interactive parts from SimpleModel
+  const handleRefsUpdate = useCallback((refs) => {
+    interactiveRefs.current = refs;
+  }, []);
+
+  // Handle click states update from SimpleModel
+  const handleClickStatesUpdate = useCallback((states) => {
+    setClickStates(states);
+  }, []);
+
+  // Reset all teeth to original color
+  const handleReset = useCallback(() => {
+    // Create an empty object for new states
+    const newStates = {};
+    
+    // Reset each interactive part in the scene
+    Object.values(interactiveRefs.current).forEach(mesh => {
+      if (mesh && mesh.material && mesh.userData && mesh.userData.originalColor) {
+        mesh.material.color.copy(mesh.userData.originalColor);
+      }
+    });
+    
+    // Reset the clickStates
+    setClickStates(newStates);
+    
+    Alert.alert("Reset Complete", "All teeth have been reset to their original colors.");
+  }, []);
+
+  // Handle "Done" button press - save selected teeth
+  const handleSelectionDone = useCallback(async (selections) => {
+    try {
+      // Store selections in AsyncStorage
+      await AsyncStorage.setItem('teethSelections', JSON.stringify(selections));
+      
+      Alert.alert(
+        "Selections Saved",
+        `Red teeth: ${selections.red.join(', ')}\nBlue teeth: ${selections.blue.join(', ')}`,
+        [{ text: "OK" }]
+      );
+      
+      // You can add navigation here to move to next screen
+      // navigation.navigate('NextScreen', { selections });
+      
+      console.log("Saved teeth selections:", selections);
+    } catch (e) {
+      console.error("Error saving teeth selections:", e);
+      Alert.alert("Error", "Failed to save teeth selections. Please try again.");
+    }
+  }, []);
+
   return (
     <View style={styles.container}>
       {/* Canvas for 3D Model */}
@@ -96,7 +153,12 @@ export default function TeethModelViewer() {
         
         {/* 3D Model */}
         <Suspense fallback={null}>
-          <SimpleModel onLoad={handleModelLoaded} />
+          <SimpleModel 
+            onLoad={handleModelLoaded} 
+            onRefsUpdate={handleRefsUpdate}
+            onClickStatesUpdate={handleClickStatesUpdate}
+            clickStates={clickStates}
+          />
         </Suspense>
       </Canvas>
 
@@ -118,6 +180,16 @@ export default function TeethModelViewer() {
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
+      )}
+
+      {/* Selection Controls (Reset and Done buttons) */}
+      {modelLoaded && !error && (
+        <TeethSelectionControls 
+          clickStates={clickStates}
+          interactiveRefs={interactiveRefs}
+          onReset={handleReset}
+          onDone={handleSelectionDone}
+        />
       )}
 
       {/* UI controls outside the Canvas */}
@@ -167,7 +239,7 @@ export default function TeethModelViewer() {
       {/* Instructions */}
       <View style={styles.instructions}>
         <Text style={styles.instructionText}>
-          Tap on T11_labial tooth to change its color
+          Tap on teeth to select (red → blue → original). Press Done when finished.
         </Text>
       </View>
     </View>

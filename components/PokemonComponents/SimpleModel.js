@@ -4,13 +4,13 @@ import { useFrame } from "@react-three/fiber/native";
 import * as THREE from 'three';
 import { Asset } from 'expo-asset';
 
-function SimpleModel({ onLoad }) {
+function SimpleModel({ onLoad, onRefsUpdate, onClickStatesUpdate, clickStates: externalClickStates }) {
   // Load the model - ensure path is correct
   const modelPath = Asset.fromModule(require("../../assets/models/Dental_Model_Mobile.glb"));
   const { scene } = useGLTF(modelPath.uri);
   
-  // Track click states for all meshes
-  const [clickStates, setClickStates] = useState({});
+  // Track click states for all meshes internally
+  const [clickStates, setClickStates] = useState(externalClickStates || {});
   // Flag to ensure we only run initialization once
   const [initialized, setInitialized] = useState(false);
   
@@ -122,6 +122,11 @@ function SimpleModel({ onLoad }) {
       // Mark as initialized
       setInitialized(true);
       
+      // Pass references back to parent component
+      if (onRefsUpdate && typeof onRefsUpdate === 'function') {
+        onRefsUpdate(interactiveRefs.current);
+      }
+      
       // Notify parent component that model is loaded
       if (onLoad && typeof onLoad === 'function') {
         onLoad();
@@ -129,7 +134,20 @@ function SimpleModel({ onLoad }) {
     } catch (error) {
       console.error("Error initializing model:", error);
     }
-  }, [scene, modelPath, onLoad]);
+  }, [scene, modelPath, onLoad, onRefsUpdate]);
+  
+  // Apply external clickStates when they change (useful for reset functionality)
+  useEffect(() => {
+    if (externalClickStates && Object.keys(externalClickStates).length === 0) {
+      // This is likely a reset
+      Object.values(interactiveRefs.current).forEach(mesh => {
+        if (mesh && mesh.material && mesh.userData && mesh.userData.originalColor) {
+          mesh.material.color.copy(mesh.userData.originalColor);
+        }
+      });
+      setClickStates({});
+    }
+  }, [externalClickStates]);
   
   // Use raycaster to handle clicks on the entire model
   useFrame((state) => {
@@ -190,7 +208,22 @@ function SimpleModel({ onLoad }) {
       mesh.material.color.set(nextColor);
     }
     
-    setClickStates((prev) => ({ ...prev, [id]: nextColor }));
+    // Update internal state
+    setClickStates((prev) => {
+      const newStates = { ...prev, [id]: nextColor === "original" ? null : nextColor };
+      
+      // If nextColor is "original", remove the entry
+      if (nextColor === "original") {
+        delete newStates[id];
+      }
+      
+      // Notify parent component of the update
+      if (onClickStatesUpdate && typeof onClickStatesUpdate === 'function') {
+        onClickStatesUpdate(newStates);
+      }
+      
+      return newStates;
+    });
   };
   
   return (
