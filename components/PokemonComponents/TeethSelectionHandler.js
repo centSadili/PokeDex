@@ -1,95 +1,193 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { View, StyleSheet, TouchableOpacity, Text, Alert } from "react-native";
 
-// Utility function to group teeth by color state
-export const processTeethSelections = (clickStates, interactiveParts) => {
-  const selections = {
-    red: [],
-    blue: [],
-    unselected: []
-  };
+// Memoized tooth name extraction function for better performance
+const getBaseToothName = (fullName) => fullName.split('_')[0];
 
-  // Convert from UUID keys to tooth names
-  Object.entries(clickStates).forEach(([uuid, color]) => {
-    // Find the tooth name associated with this UUID
-    const toothName = findToothNameByUuid(uuid, interactiveParts);
-    if (toothName) {
-      // Extract the base tooth number (e.g., "T11" from "T11_labial")
-      const baseToothName = toothName.split('_')[0];
-      
-      // Add to appropriate color group if not already there
-      if (color === "red" && !selections.red.includes(baseToothName)) {
-        selections.red.push(baseToothName);
-      } else if (color === "blue" && !selections.blue.includes(baseToothName)) {
-        selections.blue.push(baseToothName);
-      }
-    }
-  });
+// Cache for tooth name lookups to avoid repetitive operations
+const toothNameCache = {};
 
-  // Find unselected teeth
-  for (const partName of Object.keys(interactiveParts)) {
-    const baseToothName = partName.split('_')[0];
-    if (
-      !selections.red.includes(baseToothName) && 
-      !selections.blue.includes(baseToothName) &&
-      !selections.unselected.includes(baseToothName)
-    ) {
-      selections.unselected.push(baseToothName);
-    }
-  }
+// OPTIMIZATION: WeakMap for faster lookup without garbage collection issues
+const meshToNameMap = new WeakMap();
 
-  return selections;
-};
-
-// Helper function to find tooth name from UUID
+// OPTIMIZATION: Improved tooth name finding with WeakMap and direct lookup
 const findToothNameByUuid = (uuid, interactiveParts) => {
   for (const [name, ref] of Object.entries(interactiveParts)) {
-    if (ref && ref.uuid === uuid) {
+    if (!ref) continue;
+    
+    // Use WeakMap for cached lookups
+    let cachedName = meshToNameMap.get(ref);
+    if (cachedName) return cachedName;
+    
+    // Direct UUID comparison for faster performance
+    if (ref.uuid === uuid) {
+      meshToNameMap.set(ref, name);
       return name;
     }
   }
   return null;
 };
 
-// Component to add to TeethModelViewer
+// Utility function to group teeth by color state - optimized version
+export const processTeethSelections = (clickStates, interactiveParts) => {
+  // Use Sets for faster lookup and unique values
+  const redTeeth = new Set();
+  const blueTeeth = new Set();
+  const allTeeth = new Set();
+  
+  // Reset cache if needed (when selections change dramatically)
+  if (Object.keys(toothNameCache).length > 1000) {
+    Object.keys(toothNameCache).forEach(key => {
+      delete toothNameCache[key];
+    });
+  }
+
+  // OPTIMIZATION: Faster processing with direct object iterations
+  Object.entries(clickStates).forEach(([uuid, color]) => {
+    // Get tooth name from cache or find it
+    let toothName = toothNameCache[uuid];
+    
+    if (!toothName) {
+      toothName = findToothNameByUuid(uuid, interactiveParts);
+      if (toothName) {
+        // Cache for future lookups
+        toothNameCache[uuid] = toothName;
+      }
+    }
+    
+    if (toothName) {
+      // Extract the base tooth number and add to appropriate set
+      const baseToothName = getBaseToothName(toothName);
+      allTeeth.add(baseToothName);
+      
+      if (color === "red") {
+        redTeeth.add(baseToothName);
+      } else if (color === "blue") {
+        blueTeeth.add(baseToothName);
+      }
+    }
+  });
+
+  // Find unselected teeth by getting names from interactive parts
+  const unselectedTeeth = new Set();
+  
+  // OPTIMIZATION: Process interactive parts once with a cached set of base names
+  const processedBaseNames = new Set();
+  
+  for (const partName of Object.keys(interactiveParts)) {
+    const baseToothName = getBaseToothName(partName);
+    
+    // Skip if we've already processed this base name
+    if (processedBaseNames.has(baseToothName)) continue;
+    processedBaseNames.add(baseToothName);
+    
+    // Add to unselected if not already in red or blue
+    if (!redTeeth.has(baseToothName) && !blueTeeth.has(baseToothName)) {
+      unselectedTeeth.add(baseToothName);
+    }
+  }
+
+  // Convert sets to sorted arrays for consistent output
+  return {
+    red: [...redTeeth].sort(),
+    blue: [...blueTeeth].sort(),
+    unselected: [...unselectedTeeth].sort()
+  };
+};
+
+// OPTIMIZATION: Pure component for better performance
+const PureButton = React.memo(({ onPress, style, text, disabled }) => (
+  <TouchableOpacity 
+    style={style} 
+    onPress={onPress}
+    activeOpacity={0.7}
+    disabled={disabled}
+  >
+    <Text style={styles.buttonText}>{text}</Text>
+  </TouchableOpacity>
+));
+
+// Component to add to TeethModelViewer - optimized with performance improvements
 export const TeethSelectionControls = ({ 
   clickStates, 
   interactiveRefs, 
   onReset, 
   onDone 
 }) => {
-  const handleDone = () => {
-    const selections = processTeethSelections(clickStates, interactiveRefs.current);
-    
-    if (onDone && typeof onDone === 'function') {
-      onDone(selections);
-    } else {
-      // Default behavior if no callback provided
-      Alert.alert(
-        "Selections Saved",
-        `Red teeth: ${selections.red.join(', ')}\nBlue teeth: ${selections.blue.join(', ')}`,
-        [{ text: "OK" }]
-      );
+  // Debounce tooth processing to reduce unnecessary calculations
+  const [isProcessing, setIsProcessing] = useState(false);
+  const processingTimeoutRef = useRef(null);
+  
+  // OPTIMIZATION: Immediate reset without state processing
+  const handleReset = () => {
+    if (isProcessing) return;
+    if (onReset && typeof onReset === 'function') {
+      onReset();
     }
   };
-
-  return (
-    <View style={styles.selectionControls}>
-      <TouchableOpacity 
-        style={styles.resetButton} 
-        onPress={onReset}
-      >
-        <Text style={styles.buttonText}>Reset</Text>
-      </TouchableOpacity>
+  
+  // Handler with debouncing
+  const handleDone = () => {
+    if (isProcessing) return;
+    
+    setIsProcessing(true);
+    
+    // OPTIMIZATION: Use direct callback instead of requestAnimationFrame
+    // This makes the processing start immediately
+    try {
+      const selections = processTeethSelections(clickStates, interactiveRefs.current);
       
-      <TouchableOpacity 
-        style={styles.doneButton} 
+      if (onDone && typeof onDone === 'function') {
+        onDone(selections);
+      } else {
+        // Default behavior if no callback provided
+        Alert.alert(
+          "Selections Saved",
+          `Red teeth: ${selections.red.join(', ')}\nBlue teeth: ${selections.blue.join(', ')}`,
+          [{ text: "OK" }]
+        );
+      }
+    } catch (error) {
+      console.error("Error processing selections:", error);
+      Alert.alert("Error", "Failed to process teeth selections.");
+    } finally {
+      // Reset processing flag after delay
+      processingTimeoutRef.current = setTimeout(() => {
+        setIsProcessing(false);
+      }, 300);
+    }
+  };
+  
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+      }
+    };
+  }, []);
+  
+  // Memoize the component to prevent unnecessary re-renders
+  return useMemo(() => (
+    <View style={styles.selectionControls}>
+      <PureButton 
+        style={styles.resetButton} 
+        onPress={handleReset}
+        text="Reset"
+        disabled={isProcessing}
+      />
+      
+      <PureButton 
+        style={[
+          styles.doneButton,
+          isProcessing && styles.disabledButton
+        ]} 
         onPress={handleDone}
-      >
-        <Text style={styles.buttonText}>Done</Text>
-      </TouchableOpacity>
+        text={isProcessing ? "Processing..." : "Done"}
+        disabled={isProcessing}
+      />
     </View>
-  );
+  ), [onReset, handleDone, isProcessing]);
 };
 
 const styles = StyleSheet.create({
@@ -106,6 +204,11 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     alignItems: "center",
     width: 80,
+    elevation: 3, // Add shadow on Android
+    shadowColor: "#000", // iOS shadow
+    shadowOffset: { width: 1, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
   },
   doneButton: {
     backgroundColor: "#4CAF50",
@@ -113,6 +216,15 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     alignItems: "center",
     width: 80,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 1, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+  },
+  disabledButton: {
+    backgroundColor: "#A5D6A7", // lighter green
+    opacity: 0.8,
   },
   buttonText: {
     color: "white",

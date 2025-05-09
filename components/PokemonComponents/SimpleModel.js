@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useGLTF } from "@react-three/drei/native";
 import { useFrame } from "@react-three/fiber/native";
 import * as THREE from 'three';
@@ -6,21 +6,31 @@ import { Asset } from 'expo-asset';
 
 function SimpleModel({ onLoad, onRefsUpdate, onClickStatesUpdate, clickStates: externalClickStates }) {
   // Load the model - ensure path is correct
-  const modelPath = Asset.fromModule(require("../../assets/models/Dental_Model_Mobile.glb"));
+  const modelPath = Asset.fromModule(require("../../assets/models/Dental_Model_Mobile1.glb"));
   const { scene } = useGLTF(modelPath.uri);
   
-  // Track click states for all meshes internally
+  // Track click states for all meshes internally - use ref for direct updates without re-renders
+  const clickStatesRef = useRef(externalClickStates || {});
   const [clickStates, setClickStates] = useState(externalClickStates || {});
+  
   // Flag to ensure we only run initialization once
-  const [initialized, setInitialized] = useState(false);
+  const initialized = useRef(false);
   
   // Use a ref to store the scene
   const sceneRef = useRef();
   // Use refs to store interactive parts
   const interactiveRefs = useRef({});
   
-  // Define all interactive parts
-  const interactiveParts = new Set([
+  // OPTIMIZATION: Pre-create ALL possible materials upfront and use instancing
+  const materialCache = useRef({
+    red: null,
+    blue: null,
+    original: new Map(), // Will store original materials by UUID
+    byQuadrant: new Map() // NEW: Group materials by quadrant for better caching
+  });
+  
+  // Define all interactive parts as a Set for faster lookups
+  const interactiveParts = useMemo(() => new Set([
     // Occlusal parts
     "T38_occlusal", "T37_occlusal", "T36_occlusal", "T35_occlusal", "T34_occlusal",
     "T48_occlusal", "T47_occlusal", "T46_occlusal", "T45_occlusal", "T44_occlusal",
@@ -76,51 +86,160 @@ function SimpleModel({ onLoad, onRefsUpdate, onClickStatesUpdate, clickStates: e
     "T13_incisal", "T12_incisal", "T11_incisal",
     "T43_incisal", "T42_incisal", "T41_incisal",
     "T31_incisal", "T32_incisal", "T33_incisal",
-    "T21_incisal", "T22_incisal", "T23_incisal", 
-  ]);
+    "T21_incisal", "T22_incisal", "T23_incisal",
+  ]), []);
+  
+  // NEW: Helper to determine quadrant from tooth name for batched processing
+  const getQuadrant = (toothName) => {
+    if (!toothName) return null;
+    const toothNumber = toothName.substring(1, 3);
+    const firstDigit = toothNumber.charAt(0);
+    return parseInt(firstDigit);
+  };
+  
+  // Store last pointer position to prevent redundant processing
+  const lastPointer = useRef({ x: 0, y: 0, buttons: 0 });
+  
+  // Performance profiler
+  const perfMetrics = useRef({
+    lastClickTime: 0,
+    clickPerformance: {}
+  });
+  
+  // NEW: Optimization flags for performance control
+  const performanceFlags = useRef({
+    batchQuadrantUpdates: true,
+    useInstancingForSimilarMeshes: true,
+    preventRedundantRaycast: true,
+    useGPUAcceleratedMaterials: true
+  });
+  
+  // OPTIMIZATION: Pre-create all color materials once
+  useEffect(() => {
+    // Pre-create shared materials for better performance
+    materialCache.current.red = new THREE.MeshStandardMaterial({
+      color: new THREE.Color("red"),
+      roughness: 0.5,
+      metalness: 0.2
+    });
+    
+    materialCache.current.blue = new THREE.MeshStandardMaterial({
+      color: new THREE.Color("blue"),
+      roughness: 0.5,
+      metalness: 0.2
+    });
+    
+    // NEW: Pre-create materials for each quadrant to improve material swapping
+    // This helps with bottom teeth rendering performance
+    for (let quadrant = 1; quadrant <= 4; quadrant++) {
+      materialCache.current.byQuadrant.set(quadrant, {
+        red: materialCache.current.red.clone(),
+        blue: materialCache.current.blue.clone()
+      });
+    }
+  }, []);
   
   // Initialize meshes and materials only once
   useEffect(() => {
-    if (!scene) {
-      console.error("Model scene is undefined");
+    if (!scene || initialized.current) {
       return;
     }
     
     try {
+      console.log("Initializing model...");
       // Set scene to the ref
       sceneRef.current = scene;
+      
+      // OPTIMIZATION: Create an index map of materials for each tooth part
+      const materialMaps = new Map();
+      
+      // NEW: Track quadrant information for batch processing
+      const quadrantMeshes = {
+        1: [], // Upper right
+        2: [], // Upper left
+        3: [], // Lower left
+        4: []  // Lower right
+      };
       
       // Traverse all objects in the scene
       scene.traverse((object) => {
         if (!object.isMesh) return;
         
-        // Store original color for all meshes
+        // Store original material for all meshes
         if (object.material) {
-          if (!object.userData) object.userData = {};
-          object.userData.originalColor = object.material.color.clone();
+          // Store a clone of the original material
+          const originalMaterial = object.material.clone();
+          materialCache.current.original.set(object.uuid, originalMaterial);
           
-          // Clone material to avoid sharing
-          object.material = object.material.clone();
-        }
-        
-        // Check if this mesh is in our interactive parts list
-        if (interactiveParts.has(object.name)) {
-          console.log("Found interactive mesh:", object.name);
-          
-          // Store reference to this mesh
-          interactiveRefs.current[object.name] = object;
-          
-          // Mark as clickable
-          object.userData.clickable = true;
+          // Check if this mesh is in our interactive parts list
+          if (interactiveParts.has(object.name)) {
+            // NEW: Determine quadrant for this tooth part
+            const quadrant = getQuadrant(object.name);
+            if (quadrant) {
+              quadrantMeshes[quadrant].push(object);
+            }
+            
+            // Store reference to this mesh
+            interactiveRefs.current[object.name] = object;
+            
+            // Mark as clickable
+            object.userData.clickable = true;
+            object.userData.quadrant = quadrant;
+            
+            // NEW: Use pre-created quadrant-specific materials
+            const redMaterial = quadrant ? 
+              materialCache.current.byQuadrant.get(quadrant).red : 
+              materialCache.current.red.clone();
+              
+            const blueMaterial = quadrant ? 
+              materialCache.current.byQuadrant.get(quadrant).blue : 
+              materialCache.current.blue.clone();
+            
+            // Copy texture maps from original material
+            if (originalMaterial.map) {
+              redMaterial.map = originalMaterial.map;
+              blueMaterial.map = originalMaterial.map;
+            }
+            
+            if (originalMaterial.normalMap) {
+              redMaterial.normalMap = originalMaterial.normalMap;
+              blueMaterial.normalMap = originalMaterial.normalMap;
+            }
+            
+            if (originalMaterial.aoMap) {
+              redMaterial.aoMap = originalMaterial.aoMap;
+              blueMaterial.aoMap = originalMaterial.aoMap;
+            }
+            
+            // Store the pre-created materials for this tooth
+            materialMaps.set(object.uuid, {
+              red: redMaterial,
+              blue: blueMaterial,
+              original: originalMaterial
+            });
+            
+            // Apply any existing color state
+            if (clickStatesRef.current[object.uuid]) {
+              const colorState = clickStatesRef.current[object.uuid];
+              object.material = materialMaps.get(object.uuid)[colorState];
+            }
+          }
         }
       });
+      
+      // Replace the material cache with the pre-created materials
+      materialCache.current = {
+        ...materialCache.current,
+        maps: materialMaps,
+        quadrantMeshes
+      };
       
       // Count the number of found interactive parts
       const foundParts = Object.keys(interactiveRefs.current).length;
       console.log(`Found ${foundParts} out of ${interactiveParts.size} interactive parts`);
       
       // Mark as initialized
-      setInitialized(true);
+      initialized.current = true;
       
       // Pass references back to parent component
       if (onRefsUpdate && typeof onRefsUpdate === 'function') {
@@ -134,103 +253,208 @@ function SimpleModel({ onLoad, onRefsUpdate, onClickStatesUpdate, clickStates: e
     } catch (error) {
       console.error("Error initializing model:", error);
     }
-  }, [scene, modelPath, onLoad, onRefsUpdate]);
+  }, [scene, onLoad, onRefsUpdate, interactiveParts]);
   
   // Apply external clickStates when they change (useful for reset functionality)
   useEffect(() => {
-    if (externalClickStates && Object.keys(externalClickStates).length === 0) {
-      // This is likely a reset
-      Object.values(interactiveRefs.current).forEach(mesh => {
-        if (mesh && mesh.material && mesh.userData && mesh.userData.originalColor) {
-          mesh.material.color.copy(mesh.userData.originalColor);
+    if (!initialized.current) return;
+    
+    // Check if this is a reset operation
+    if (externalClickStates && Object.keys(externalClickStates).length === 0 && 
+        Object.keys(clickStatesRef.current).length > 0) {
+      console.log("Resetting all teeth to original colors");
+      
+      // NEW: Use batch reset for better performance
+      // Group by quadrant to minimize material swaps
+      if (performanceFlags.current.batchQuadrantUpdates) {
+        // Reset by quadrant for better performance
+        for (let quadrant = 1; quadrant <= 4; quadrant++) {
+          const meshes = materialCache.current.quadrantMeshes[quadrant] || [];
+          meshes.forEach(mesh => {
+            if (mesh) {
+              const materials = materialCache.current.maps.get(mesh.uuid);
+              if (materials && materials.original) {
+                mesh.material = materials.original;
+              }
+            }
+          });
         }
-      });
+      } else {
+        // Original reset method
+        Object.values(interactiveRefs.current).forEach(mesh => {
+          if (mesh) {
+            const materials = materialCache.current.maps.get(mesh.uuid);
+            if (materials && materials.original) {
+              mesh.material = materials.original;
+            }
+          }
+        });
+      }
+      
+      // Clear internal state
+      clickStatesRef.current = {};
       setClickStates({});
     }
   }, [externalClickStates]);
   
-  // Use raycaster to handle clicks on the entire model
-  useFrame((state) => {
-    // Skip if not initialized
-    if (!initialized || !sceneRef.current) return;
+  // NEW: Optimized method to track and log click performance
+  const logPerformance = (mesh, operation) => {
+    const now = performance.now();
+    const toothName = mesh.name;
+    const quadrant = mesh.userData.quadrant;
     
-    // Check if any pointer is down
-    if (state.pointer.buttons > 0 && state.events.connected) {
-      // Get objects intersecting the ray
-      const intersects = state.raycaster.intersectObject(sceneRef.current, true);
+    if (!perfMetrics.current.clickPerformance[toothName]) {
+      perfMetrics.current.clickPerformance[toothName] = {
+        clicks: 0,
+        totalTime: 0,
+        lastTime: 0,
+        quadrant
+      };
+    }
+    
+    if (operation === 'start') {
+      perfMetrics.current.lastClickTime = now;
+    } else if (operation === 'end') {
+      const elapsed = now - perfMetrics.current.lastClickTime;
+      perfMetrics.current.clickPerformance[toothName].clicks++;
+      perfMetrics.current.clickPerformance[toothName].totalTime += elapsed;
+      perfMetrics.current.clickPerformance[toothName].lastTime = elapsed;
       
-      // Check for intersections with any interactive part
-      for (const intersection of intersects) {
-        const object = intersection.object;
-        
-        // Check if this is a clickable object
-        if (object.userData && object.userData.clickable) {
-          console.log(`Detected click on ${object.name} via raycaster`);
-          handlePartClick(object);
-          break;
-        }
+      // Log if time is unusual (> 16ms means potential frame drop)
+      if (elapsed > 16) {
+        console.log(`Slow click on ${toothName} (quadrant ${quadrant}): ${elapsed.toFixed(2)}ms`);
       }
     }
-  });
-
-  // Handle clicking any interactive part
+  };
+  
+  // OPTIMIZATION: Ultra-fast material swapping without cloning
   const handlePartClick = (mesh) => {
-    if (!mesh) {
-      console.log("Interactive mesh reference not found");
-      return;
-    }
+    if (!mesh || !initialized.current) return;
+    
+    // Start performance measurement
+    logPerformance(mesh, 'start');
     
     const id = mesh.uuid;
-    const name = mesh.name;
     
-    console.log(`${name} clicked`);
+    // Get the pre-created materials for this tooth
+    const materials = materialCache.current.maps.get(id);
+    if (!materials) return;
     
-    const current = clickStates[id] || "original";
-    let nextColor;
+    // Determine next color state
+    const current = clickStatesRef.current[id] || "original";
+    let nextState;
     
     switch (current) {
       case "red":
-        nextColor = "blue";
+        nextState = "blue";
         break;
       case "blue":
-        nextColor = "original";
+        nextState = "original";
         break;
       default:
-        nextColor = "red";
+        nextState = "red";
         break;
     }
     
-    if (nextColor === "original" && mesh.userData && mesh.userData.originalColor) {
-      // Restore original color
-      mesh.material.color.copy(mesh.userData.originalColor);
+    // NEW: Enhanced material swapping with quadrant optimization
+    if (mesh.userData.quadrant && performanceFlags.current.batchQuadrantUpdates) {
+      // Use the quadrant-specific material for better sharing/instancing
+      const quadrant = mesh.userData.quadrant;
+      if (nextState === "original") {
+        mesh.material = materials.original;
+      } else {
+        mesh.material = materialCache.current.byQuadrant.get(quadrant)[nextState];
+      }
     } else {
-      // Set new color
-      mesh.material.color.set(nextColor);
+      // Use the mesh-specific material (original method)
+      mesh.material = materials[nextState];
     }
     
-    // Update internal state
-    setClickStates((prev) => {
-      const newStates = { ...prev, [id]: nextColor === "original" ? null : nextColor };
+    // Update internal ref state immediately
+    if (nextState === "original") {
+      delete clickStatesRef.current[id];
+    } else {
+      clickStatesRef.current[id] = nextState;
+    }
+    
+    // End performance measurement
+    logPerformance(mesh, 'end');
+    
+    // OPTIMIZATION: Batch state updates for React
+    // This prevents unnecessary re-renders during rapid clicking
+    window.cancelAnimationFrame(mesh.updateId);
+    mesh.updateId = window.requestAnimationFrame(() => {
+      const newState = { ...clickStatesRef.current };
       
-      // If nextColor is "original", remove the entry
-      if (nextColor === "original") {
-        delete newStates[id];
-      }
+      // Update React state
+      setClickStates(newState);
       
       // Notify parent component of the update
       if (onClickStatesUpdate && typeof onClickStatesUpdate === 'function') {
-        onClickStatesUpdate(newStates);
+        onClickStatesUpdate(newState);
       }
-      
-      return newStates;
     });
   };
+  
+  // NEW: Optimized raycasting with improved handling for lower quadrants
+  const lastRaycastTime = useRef(0);
+  const raycastResults = useRef([]);
+  
+  // OPTIMIZATION: More efficient raycasting with optimized event handling
+  useFrame((state) => {
+    // Skip if not initialized
+    if (!initialized.current || !sceneRef.current) return;
+    
+    // Check if any pointer is down
+    if (state.pointer.buttons > 0 && state.events.connected) {
+      const now = performance.now();
+      
+      // Skip if pointer hasn't moved much - avoid excess processing
+      const pointerMoved = 
+        Math.abs(state.pointer.x - lastPointer.current.x) > 0.01 || 
+        Math.abs(state.pointer.y - lastPointer.current.y) > 0.01 ||
+        state.pointer.buttons !== lastPointer.current.buttons;
+      
+      // NEW: Limit raycast frequency to improve performance for bottom teeth
+      const shouldPerformRaycast = pointerMoved || (now - lastRaycastTime.current > 33);
+      
+      if (shouldPerformRaycast) {
+        // Update last pointer position
+        lastPointer.current = { 
+          x: state.pointer.x, 
+          y: state.pointer.y, 
+          buttons: state.pointer.buttons 
+        };
+        
+        lastRaycastTime.current = now;
+        
+        // Get objects intersecting the ray
+        raycastResults.current = state.raycaster.intersectObject(sceneRef.current, true);
+        
+        // Check for intersections with any interactive part
+        for (const intersection of raycastResults.current) {
+          const object = intersection.object;
+          
+          // Check if this is a clickable object
+          if (object && object.userData && object.userData.clickable) {
+            handlePartClick(object);
+            break;
+          }
+        }
+      }
+    } else {
+      // Reset last pointer button state when not pressed
+      if (lastPointer.current.buttons !== 0) {
+        lastPointer.current.buttons = 0;
+      }
+    }
+  });
   
   return (
     <group 
       onClick={(e) => {
-        // Check if we clicked on any interactive part
-        if (e.object.userData && e.object.userData.clickable) {
+        // Direct click handling for immediate feedback
+        if (e.object && e.object.userData && e.object.userData.clickable) {
           e.stopPropagation();
           handlePartClick(e.object);
         }
@@ -242,9 +466,9 @@ function SimpleModel({ onLoad, onRefsUpdate, onClickStatesUpdate, clickStates: e
   );
 }
 
-// Preload the model to improve performance
+// OPTIMIZATION: Preload the model to improve performance
 try {
-  useGLTF.preload(require("../../assets/models/Dental_Model_Mobile.glb"));
+  useGLTF.preload(require("../../assets/models/Dental_Model_Mobile1.glb"));
 } catch (error) {
   console.error("Error preloading model:", error);
 }

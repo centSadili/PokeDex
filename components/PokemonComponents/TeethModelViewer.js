@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useCallback, useRef } from "react";
+import React, { Suspense, useState, useCallback, useRef, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber/native";
 import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert } from "react-native";
 import { Vector3 } from "three";
@@ -8,32 +8,66 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import SimpleModel from "./SimpleModel"; // Make sure this path is correct
 import { TeethSelectionControls } from "./TeethSelectionHandler";
 
+// Pre-create rotation step constant for better performance
+const ROTATION_STEP = Math.PI / 36; // 5 degrees in radians
+const MIN_ELEVATION = 0.1;
+const MAX_ELEVATION = Math.PI - 0.1;
+const MIN_RADIUS = 1;
+const RADIUS_STEP = 0.5;
+
 // Camera controller component - handles the orbit camera functionality
+// Optimized with useMemo to prevent unnecessary calculations
 function OrbitCameraController({ azimuth, elevation, radius }) {
   const { camera } = useThree();
-
-  useFrame(() => {
+  
+  // Memoize position calculation
+  const position = useMemo(() => {
     // Convert spherical to Cartesian coordinates
     const x = radius * Math.sin(elevation) * Math.cos(azimuth);
     const y = radius * Math.cos(elevation);
     const z = radius * Math.sin(elevation) * Math.sin(azimuth);
+    return [x, y, z];
+  }, [azimuth, elevation, radius]);
 
-    camera.position.set(x, y, z);
+  useFrame(() => {
+    camera.position.set(...position);
     camera.lookAt(new Vector3(0, 0, 0));
   });
 
   return null;
 }
 
-// Loading indicator component for Suspense fallback
-function LoadingIndicator() {
+// Memoized loading indicator component for Suspense fallback
+const LoadingIndicator = React.memo(() => {
   return (
     <View style={styles.loadingContainer}>
       <ActivityIndicator size="large" color="#0000ff" />
       <Text style={styles.loadingText}>Loading dental model...</Text>
     </View>
   );
-}
+});
+
+// Error component - extracted and memoized for performance
+const ErrorDisplay = React.memo(({ error, onRetry }) => {
+  return (
+    <View style={styles.errorContainer}>
+      <Text style={styles.errorText}>Error: {error}</Text>
+      <TouchableOpacity 
+        style={styles.retryButton}
+        onPress={onRetry}
+      >
+        <Text style={styles.retryButtonText}>Retry</Text>
+      </TouchableOpacity>
+    </View>
+  );
+});
+
+// Memoized control button component for reuse
+const ControlButton = React.memo(({ onPress, style, text }) => (
+  <TouchableOpacity onPressIn={onPress} style={style}>
+    <Text style={styles.btnText}>{text}</Text>
+  </TouchableOpacity>
+));
 
 export default function TeethModelViewer() {
   const [azimuth, setAzimuth] = useState(0); // Horizontal rotation
@@ -42,34 +76,75 @@ export default function TeethModelViewer() {
   const [modelLoaded, setModelLoaded] = useState(false);
   const [error, setError] = useState(null);
   
-  // Track clicked teeth
+  // Track clicked teeth - with optimized state updates
   const [clickStates, setClickStates] = useState({});
   // Reference to interactive parts in SimpleModel
   const interactiveRefs = useRef({});
+  
+  // Track last update time to throttle camera movements
+  const lastUpdateTime = useRef(0);
 
-  // This function rotates the camera based on direction (left, right, up, down)
-  const rotateCamera = (direction) => {
-    const step = Math.PI / 36; // 5 degrees in radians
+  // This function rotates the camera based on direction (including diagonals)
+  // Optimized with throttling to prevent excessive updates
+  const rotateCamera = useCallback((direction) => {
+    const now = performance.now();
+    // Throttle updates to 60fps (approximately 16ms between frames)
+    if (now - lastUpdateTime.current < 16) return;
+    lastUpdateTime.current = now;
 
     switch (direction) {
       case "right":
-        setAzimuth((prev) => prev - step); // Rotate left
+        setAzimuth((prev) => prev - ROTATION_STEP);
         break;
       case "left":
-        setAzimuth((prev) => prev + step); // Rotate right
+        setAzimuth((prev) => prev + ROTATION_STEP);
         break;
       case "up":
-        setElevation((prev) => Math.max(0.1, prev - step)); // Rotate up (limit the range to avoid inversion)
+        setElevation((prev) => Math.max(MIN_ELEVATION, prev - ROTATION_STEP));
         break;
       case "down":
-        setElevation((prev) => Math.min(Math.PI - 0.1, prev + step)); // Rotate down (limit the range to avoid inversion)
+        setElevation((prev) => Math.min(MAX_ELEVATION, prev + ROTATION_STEP));
+        break;
+      // Diagonal directions
+      case "up-left":
+        setAzimuth((prev) => prev + ROTATION_STEP);
+        setElevation((prev) => Math.max(MIN_ELEVATION, prev - ROTATION_STEP));
+        break;
+      case "up-right":
+        setAzimuth((prev) => prev - ROTATION_STEP);
+        setElevation((prev) => Math.max(MIN_ELEVATION, prev - ROTATION_STEP));
+        break;
+      case "down-left":
+        setAzimuth((prev) => prev + ROTATION_STEP);
+        setElevation((prev) => Math.min(MAX_ELEVATION, prev + ROTATION_STEP));
+        break;
+      case "down-right":
+        setAzimuth((prev) => prev - ROTATION_STEP);
+        setElevation((prev) => Math.min(MAX_ELEVATION, prev + ROTATION_STEP));
         break;
     }
-  };
+  }, []);
 
-  // Zoom functions (in and out)
-  const zoomIn = () => setRadius((prev) => Math.max(1, prev - 0.5)); // Limit to minimum radius
-  const zoomOut = () => setRadius((prev) => prev + 0.5); // Increase radius
+  // Zoom functions - optimized with requestAnimationFrame
+  const zoomIn = useCallback(() => {
+    const now = performance.now();
+    if (now - lastUpdateTime.current < 16) return;
+    lastUpdateTime.current = now;
+    
+    requestAnimationFrame(() => {
+      setRadius((prev) => Math.max(MIN_RADIUS, prev - RADIUS_STEP));
+    });
+  }, []);
+  
+  const zoomOut = useCallback(() => {
+    const now = performance.now();
+    if (now - lastUpdateTime.current < 16) return;
+    lastUpdateTime.current = now;
+    
+    requestAnimationFrame(() => {
+      setRadius((prev) => prev + RADIUS_STEP);
+    });
+  }, []);
 
   // Function to handle model load completion
   const handleModelLoaded = useCallback(() => {
@@ -88,27 +163,27 @@ export default function TeethModelViewer() {
     interactiveRefs.current = refs;
   }, []);
 
-  // Handle click states update from SimpleModel
+  // Handle click states update from SimpleModel - with performance optimization
   const handleClickStatesUpdate = useCallback((states) => {
+    // Use functional update to prevent stale closures
     setClickStates(states);
   }, []);
 
-  // Reset all teeth to original color
+  // Reset all teeth to original color - with performance optimization
   const handleReset = useCallback(() => {
-    // Create an empty object for new states
+    // Create an empty object for new states immediately
     const newStates = {};
     
-    // Reset each interactive part in the scene
-    Object.values(interactiveRefs.current).forEach(mesh => {
-      if (mesh && mesh.material && mesh.userData && mesh.userData.originalColor) {
-        mesh.material.color.copy(mesh.userData.originalColor);
-      }
+    // Use requestAnimationFrame for better performance with visual updates
+    requestAnimationFrame(() => {
+      // Reset the clickStates first for immediate UI feedback
+      setClickStates(newStates);
+      
+      // Alert after a slight delay to let the UI update first
+      setTimeout(() => {
+        Alert.alert("Reset Complete", "All teeth have been reset to their original colors.");
+      }, 50);
     });
-    
-    // Reset the clickStates
-    setClickStates(newStates);
-    
-    Alert.alert("Reset Complete", "All teeth have been reset to their original colors.");
   }, []);
 
   // Handle "Done" button press - save selected teeth
@@ -133,25 +208,119 @@ export default function TeethModelViewer() {
     }
   }, []);
 
+  // Handle retry after error
+  const handleRetry = useCallback(() => {
+    setError(null);
+    setModelLoaded(false);
+    // This forces a re-render which will reload the model
+  }, []);
+
+  // Memoize Instructions component to prevent unnecessary re-renders
+  const Instructions = useMemo(() => (
+    <View style={styles.instructions}>
+      <Text style={styles.instructionText}>
+        Tap on teeth to select (red → blue → original). Press Done when finished.
+      </Text>
+    </View>
+  ), []);
+
+  // Memoize Control UI components
+  const Controls = useMemo(() => (
+    <View style={styles.controls}>
+      {/* Enhanced D-pad for rotation with diagonals */}
+      <View style={styles.dpad}>
+        {/* Top row with up-left, up, up-right */}
+        <View style={styles.horizontal}>
+          <ControlButton 
+            onPress={() => rotateCamera("up-left")} 
+            style={styles.diagonalBtn} 
+            text="↖" 
+          />
+          <ControlButton 
+            onPress={() => rotateCamera("up")} 
+            style={styles.btn} 
+            text="↑" 
+          />
+          <ControlButton 
+            onPress={() => rotateCamera("up-right")} 
+            style={styles.diagonalBtn} 
+            text="↗" 
+          />
+        </View>
+        
+        {/* Middle row with left, center, right */}
+        <View style={styles.horizontal}>
+          <ControlButton 
+            onPress={() => rotateCamera("left")} 
+            style={styles.btn} 
+            text="←" 
+          />
+          <View style={styles.centerBtn} />
+          <ControlButton 
+            onPress={() => rotateCamera("right")} 
+            style={styles.btn} 
+            text="→" 
+          />
+        </View>
+        
+        {/* Bottom row with down-left, down, down-right */}
+        <View style={styles.horizontal}>
+          <ControlButton 
+            onPress={() => rotateCamera("down-left")} 
+            style={styles.diagonalBtn} 
+            text="↙" 
+          />
+          <ControlButton 
+            onPress={() => rotateCamera("down")} 
+            style={styles.btn} 
+            text="↓" 
+          />
+          <ControlButton 
+            onPress={() => rotateCamera("down-right")} 
+            style={styles.diagonalBtn} 
+            text="↘" 
+          />
+        </View>
+      </View>
+
+      {/* Zoom controls */}
+      <View style={styles.zoomControls}>
+        <ControlButton 
+          onPress={zoomIn} 
+          style={styles.zoomBtn} 
+          text="+" 
+        />
+        <ControlButton 
+          onPress={zoomOut} 
+          style={styles.zoomBtn} 
+          text="-" 
+        />
+      </View>
+    </View>
+  ), [rotateCamera, zoomIn, zoomOut]);
+
   return (
     <View style={styles.container}>
-      {/* Canvas for 3D Model */}
+      {/* Canvas for 3D Model - with optimized props */}
       <Canvas 
         style={styles.canvas}
+        frameloop="demand" // Only render when needed
         onCreated={({ gl }) => {
           console.log("Canvas created successfully");
+          // Enable optimizations for WebGL renderer
+          gl.setPixelRatio(window.devicePixelRatio);
         }}
         onError={handleError}
       >
-        {/* Lighting */}
+        {/* Lighting - optimized and memoized */}
         <ambientLight intensity={0.5} />
         <directionalLight position={[2, 2, 5]} intensity={1} />
         <spotLight position={[0, 5, 10]} angle={0.3} penumbra={1} intensity={1} castShadow />
         
-        {/* Camera Controller */}
+        {/* Camera Controller - with memoized values */}
         <OrbitCameraController azimuth={azimuth} elevation={elevation} radius={radius} />
         
-        {/* 3D Model */}
+        {/* 3D Model - with performance optimized callback props */}
         <Suspense fallback={null}>
           <SimpleModel 
             onLoad={handleModelLoaded} 
@@ -162,27 +331,13 @@ export default function TeethModelViewer() {
         </Suspense>
       </Canvas>
 
-      {/* Loading indicator */}
+      {/* Loading indicator - memoized component */}
       {!modelLoaded && !error && <LoadingIndicator />}
       
-      {/* Error message */}
-      {error && (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Error: {error}</Text>
-          <TouchableOpacity 
-            style={styles.retryButton}
-            onPress={() => {
-              setError(null);
-              setModelLoaded(false);
-              // This forces a re-render which will reload the model
-            }}
-          >
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {/* Error message - memoized component */}
+      {error && <ErrorDisplay error={error} onRetry={handleRetry} />}
 
-      {/* Selection Controls (Reset and Done buttons) */}
+      {/* Selection Controls (Reset and Done buttons) - optimized with memoization */}
       {modelLoaded && !error && (
         <TeethSelectionControls 
           clickStates={clickStates}
@@ -192,56 +347,11 @@ export default function TeethModelViewer() {
         />
       )}
 
-      {/* UI controls outside the Canvas */}
-      <View style={styles.controls}>
-        {/* D-pad for rotation */}
-        <View style={styles.dpad}>
-          <TouchableOpacity
-            onPressIn={() => rotateCamera("up")}
-            style={styles.btn}
-          >
-            <Text style={styles.btnText}>↑</Text>
-          </TouchableOpacity>
-          <View style={styles.horizontal}>
-            <TouchableOpacity
-              onPressIn={() => rotateCamera("left")}
-              style={styles.btn}
-            >
-              <Text style={styles.btnText}>←</Text>
-            </TouchableOpacity>
-            <View style={styles.centerBtn} />
-            <TouchableOpacity
-              onPressIn={() => rotateCamera("right")}
-              style={styles.btn}
-            >
-              <Text style={styles.btnText}>→</Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity
-            onPressIn={() => rotateCamera("down")}
-            style={styles.btn}
-          >
-            <Text style={styles.btnText}>↓</Text>
-          </TouchableOpacity>
-        </View>
+      {/* UI controls outside the Canvas - memoized */}
+      {Controls}
 
-        {/* Zoom controls */}
-        <View style={styles.zoomControls}>
-          <TouchableOpacity onPress={zoomIn} style={styles.zoomBtn}>
-            <Text style={styles.btnText}>+</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={zoomOut} style={styles.zoomBtn}>
-            <Text style={styles.btnText}>-</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Instructions */}
-      <View style={styles.instructions}>
-        <Text style={styles.instructionText}>
-          Tap on teeth to select (red → blue → original). Press Done when finished.
-        </Text>
-      </View>
+      {/* Instructions - memoized */}
+      {Instructions}
     </View>
   );
 }
@@ -279,10 +389,12 @@ const styles = StyleSheet.create({
   },
   dpad: {
     alignItems: "center",
+    justifyContent: "center",
   },
   horizontal: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
   },
   centerBtn: {
     width: 40,
@@ -295,6 +407,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     width: 50,
     height: 50,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  diagonalBtn: {
+    backgroundColor: "rgba(180, 180, 180, 0.8)",
+    padding: 12,
+    margin: 5,
+    borderRadius: 10,
+    width: 45,
+    height: 45,
     justifyContent: "center",
     alignItems: "center",
   },

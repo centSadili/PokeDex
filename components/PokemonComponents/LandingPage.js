@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect } from "react";
 import { Canvas } from "@react-three/fiber/native";
 import { useGLTF } from "@react-three/drei/native";
-import modelPath from "../../assets/models/Dental_Model_Mobile.glb";
+import modelPath from "../../assets/models/Dental_Model_Mobile1.glb";
 
 // Model component
 function Model({ modelUri }) {
