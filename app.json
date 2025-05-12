@@ -26,8 +26,17 @@
       "favicon": "./assets/favicon.png"
     },
     "jsEngine": "hermes",
-    "plugins": [
-      "expo-asset"
-    ]
+    "plugins": ["expo-asset"],
+    "assetBundlePatterns": [
+      "assets/models/*",
+      "assets/models/*.glb",
+      "assets/models/Dental_Model_Mobile1.glb",
+      "../../assets/models/Dental_Model_Mobile1.glb"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "435aea79-8963-4851-8265-8956b17af4f3"
+      }
+    }
   }
 }

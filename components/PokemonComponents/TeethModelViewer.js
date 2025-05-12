@@ -1,13 +1,16 @@
-import React, { Suspense, useState, useCallback, useRef, useMemo } from "react";
+import React, { Suspense, useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber/native";
 import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert } from "react-native";
 import { Vector3 } from "three";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-// Import SimpleModel component
-import SimpleModel from "./SimpleModel"; // Make sure this path is correct
-import { TeethSelectionControls, processTeethSelections } from "./TeethSelectionHandler";
-import TeethConfirmationModal from "./TeethConfirmationModal"; // Import the confirmation modal
+// Import components
+import SimpleModel from "./SimpleModel";
+import { TeethSelectionControls } from "./TeethSelectionHandler";
+import TeethConfirmationModal from "./TeethConfirmationModal";
+import DiagnosisSelectionModal from "./DiagnosisSelectionModal";
+import TeethDiagnosisSummary, { processTeethSelections } from "./TeethDiagnosisManager";
+import ColorSelectionPanel from "./ColorSelectionPanel";
 
 // Pre-create rotation step constant for better performance
 const ROTATION_STEP = Math.PI / 36; // 5 degrees in radians
@@ -17,7 +20,6 @@ const MIN_RADIUS = 1;
 const RADIUS_STEP = 0.5;
 
 // Camera controller component - handles the orbit camera functionality
-// Optimized with useMemo to prevent unnecessary calculations
 function OrbitCameraController({ azimuth, elevation, radius }) {
   const { camera } = useThree();
   
@@ -76,6 +78,10 @@ export default function TeethModelViewer() {
   const [radius, setRadius] = useState(5); // Camera distance (zoom)
   const [modelLoaded, setModelLoaded] = useState(false);
   const [error, setError] = useState(null);
+  const [lastClickedTooth, setLastClickedTooth] = useState(null);
+  const [showDiagnosisSummary, setShowDiagnosisSummary] = useState(false);
+
+
   
   // Track clicked teeth - with optimized state updates
   const [clickStates, setClickStates] = useState({});
@@ -89,8 +95,67 @@ export default function TeethModelViewer() {
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [currentSelections, setCurrentSelections] = useState(null);
 
+  // State for diagnosis modal
+  const [diagnosisModalVisible, setDiagnosisModalVisible] = useState(false);
+  const [selectedTeeth, setSelectedTeeth] = useState({});
+  const [selectedColorMode, setSelectedColorMode] = useState('red'); // Default to red
+  
+  // State for tracking diagnosis data
+  const [diagnosisData, setDiagnosisData] = useState({});
+
+  // Effect to load saved diagnosis data on component mount
+  useEffect(() => {
+    const loadSavedDiagnosis = async () => {
+      try {
+        const savedData = await AsyncStorage.getItem('teethDiagnosis');
+        if (savedData) {
+          setDiagnosisData(JSON.parse(savedData));
+          console.log("Loaded saved diagnosis data");
+        }
+      } catch (e) {
+        console.error("Error loading saved diagnosis data:", e);
+      }
+    };
+    
+    loadSavedDiagnosis();
+  }, []);
+
+  useEffect(() => {
+    const initializeAppData = async () => {
+      try {
+        // Optional: You can add a timestamp or version to manage resets
+        const lastResetKey = 'lastAppReset';
+        const currentVersion = '1.0'; // Update this when you want a complete reset
+        
+        const lastReset = await AsyncStorage.getItem(lastResetKey);
+        
+        if (lastReset !== currentVersion) {
+          // Perform complete reset
+          await AsyncStorage.removeItem('teethDiagnosis');
+          await AsyncStorage.removeItem('teethSelections');
+          
+          // Set new reset timestamp
+          await AsyncStorage.setItem(lastResetKey, currentVersion);
+          
+          // Reset local state
+          setDiagnosisData({});
+          setClickStates({});
+        } else {
+          // Load existing data
+          const savedData = await AsyncStorage.getItem('teethDiagnosis');
+          if (savedData) {
+            setDiagnosisData(JSON.parse(savedData));
+          }
+        }
+      } catch (e) {
+        console.error("Error initializing app data:", e);
+      }
+    };
+    
+    initializeAppData();
+  }, []);
+
   // This function rotates the camera based on direction (including diagonals)
-  // Optimized with throttling to prevent excessive updates
   const rotateCamera = useCallback((direction) => {
     const now = performance.now();
     // Throttle updates to 60fps (approximately 16ms between frames)
@@ -168,36 +233,95 @@ export default function TeethModelViewer() {
     interactiveRefs.current = refs;
   }, []);
 
-  // Handle click states update from SimpleModel - with performance optimization
+  // Handle click states update from SimpleModel
   const handleClickStatesUpdate = useCallback((states) => {
     // Use functional update to prevent stale closures
     setClickStates(states);
   }, []);
 
-  // Reset all teeth to original color - with performance optimization
+  // Reset all teeth to original color
   const handleReset = useCallback(() => {
-    // Create an empty object for new states immediately
     const newStates = {};
     
-    // Use requestAnimationFrame for better performance with visual updates
     requestAnimationFrame(() => {
       // Reset the clickStates first for immediate UI feedback
       setClickStates(newStates);
+      // Reset diagnosis data
+      setDiagnosisData({});
       
       // Alert after a slight delay to let the UI update first
       setTimeout(() => {
-        Alert.alert("Reset Complete", "All teeth have been reset to their original colors.");
+        Alert.alert("Reset Complete", "All teeth have been reset to their original colors and diagnoses.");
       }, 50);
+      
+      // Clear saved diagnosis data
+      AsyncStorage.removeItem('teethDiagnosis');
     });
   }, []);
 
+  // Color selection handler
+  const handleColorSelect = useCallback((color) => {
+    setSelectedColorMode(color);
+    
+    // Check if we have teeth currently selected (in clickStates)
+    const anySelected = Object.keys(clickStates).length > 0;
+    
+    if (anySelected) {
+      // Process teeth selections
+      const { selectedTeeth: processedTeeth } = processTeethSelections(clickStates, interactiveRefs, diagnosisData);
+      
+      // If we have selections, show the diagnosis modal
+      if (Object.keys(processedTeeth).length > 0) {
+        setSelectedTeeth(processedTeeth);
+        setDiagnosisModalVisible(true);
+      } else {
+        Alert.alert("No Teeth Selected", "Please select one or more teeth before choosing a diagnosis type.");
+      }
+    } else {
+      Alert.alert("No Teeth Selected", "Please select one or more teeth before choosing a diagnosis type.");
+    }
+  }, [clickStates, diagnosisData]);
+
+  // Handle diagnosis selection
+  const handleDiagnosisSelect = useCallback((diagnosis, colorMode, teeth) => {
+    // Create a copy of current diagnosis data
+    const updatedDiagnosisData = { ...diagnosisData };
+    
+    // Update diagnosis data for each selected tooth
+    Object.values(teeth).forEach((toothInfo) => {
+      const { toothNumber } = toothInfo;
+      
+      // Add diagnosis to the tooth
+      updatedDiagnosisData[toothNumber] = {
+        ...diagnosis,
+        color: colorMode
+      };
+    });
+    
+     // Update state
+  setDiagnosisData(updatedDiagnosisData);
+  
+  // Save to AsyncStorage
+  AsyncStorage.setItem('teethDiagnosis', JSON.stringify(updatedDiagnosisData))
+    .catch(error => console.error("Error saving diagnosis data:", error));
+    
+    // Clear teeth selections after assigning diagnosis
+    setClickStates({});
+  
+    // Close the modal
+    setDiagnosisModalVisible(false);
+  }, [diagnosisData]);
+
   // Initial handler for "Done" button - calculates selections and shows modal
-  const handleSelectionDone = useCallback((selections) => {
+  const handleSelectionDone = useCallback(() => {
+    // Process teeth selections
+    const { toothData } = processTeethSelections(clickStates, interactiveRefs, diagnosisData);
+    
     // Store the selections for the confirmation modal
-    setCurrentSelections(selections);
+    setCurrentSelections(toothData);
     // Show the confirmation modal
     setConfirmModalVisible(true);
-  }, []);
+  }, [clickStates, diagnosisData]);
 
   // Handle confirm button in modal - save the selections
   const handleConfirmSelections = useCallback(async () => {
@@ -210,6 +334,9 @@ export default function TeethModelViewer() {
       // Hide the modal
       setConfirmModalVisible(false);
       
+      // Show the diagnosis summary
+      setShowDiagnosisSummary(true);
+      
       // Show success message
       Alert.alert(
         "Selections Saved",
@@ -217,15 +344,16 @@ export default function TeethModelViewer() {
         [{ text: "OK" }]
       );
       
-      // You can add navigation here to move to next screen
-      // navigation.navigate('NextScreen', { selections: currentSelections });
-      
       console.log("Saved teeth selections:", currentSelections);
     } catch (e) {
       console.error("Error saving teeth selections:", e);
       Alert.alert("Error", "Failed to save teeth selections. Please try again.");
     }
   }, [currentSelections]);
+
+  const handleHideDiagnosisSummary = useCallback(() => {
+    setShowDiagnosisSummary(false);
+  }, []);
 
   // Handle cancel button in modal
   const handleCancelSelections = useCallback(() => {
@@ -250,7 +378,7 @@ export default function TeethModelViewer() {
   const Instructions = useMemo(() => (
     <View style={styles.instructions}>
       <Text style={styles.instructionText}>
-        Tap on teeth to select (red → blue → black → original). Press Done when finished.
+        Tap on teeth to select. Then use the color panel to assign diagnosis.
       </Text>
     </View>
   ), []);
@@ -353,12 +481,26 @@ export default function TeethModelViewer() {
         
         {/* 3D Model - with performance optimized callback props */}
         <Suspense fallback={null}>
-          <SimpleModel 
-            onLoad={handleModelLoaded} 
-            onRefsUpdate={handleRefsUpdate}
-            onClickStatesUpdate={handleClickStatesUpdate}
-            clickStates={clickStates}
-          />
+        <SimpleModel 
+              onLoad={handleModelLoaded} 
+              onRefsUpdate={handleRefsUpdate}
+              onClickStatesUpdate={handleClickStatesUpdate}
+              clickStates={clickStates}
+              colorMode={selectedColorMode}
+              onTeethClick={(mesh) => {
+                // Process the clicked tooth and immediately open diagnosis modal
+                const toothInfo = processTeethSelections(
+                  { [mesh.uuid]: selectedColorMode },
+                  interactiveRefs,
+                  diagnosisData
+                );
+                
+                if (Object.keys(toothInfo.selectedTeeth).length > 0) {
+                  setSelectedTeeth(toothInfo.selectedTeeth);
+                  setDiagnosisModalVisible(true);
+                }
+              }}
+            />   
         </Suspense>
       </Canvas>
 
@@ -367,8 +509,28 @@ export default function TeethModelViewer() {
       
       {/* Error message - memoized component */}
       {error && <ErrorDisplay error={error} onRetry={handleRetry} />}
+      
+      {/* Color Selection Panel */}
+      {modelLoaded && !error && (
+        <View style={styles.colorSelectionContainer}>
+          <ColorSelectionPanel 
+            onSelectColor={handleColorSelect}
+            selectedColor={selectedColorMode}
+          />
+        </View>
+      )}
+      
+      {/* Diagnosis Summary */}
+      {modelLoaded && !error && Object.keys(diagnosisData).length > 0 && (
+        <View style={styles.diagnosisSummaryContainer}>
+          <TeethDiagnosisSummary 
+            diagnosisData={diagnosisData}
+            onEditTooth={() => {}} // You can implement edit functionality if needed
+          />
+        </View>
+      )}
 
-      {/* Selection Controls (Reset and Done buttons) - optimized with memoization */}
+      {/* Selection Controls (Reset and Done buttons) */}
       {modelLoaded && !error && (
         <TeethSelectionControls 
           clickStates={clickStates}
@@ -378,11 +540,38 @@ export default function TeethModelViewer() {
         />
       )}
 
+      {showDiagnosisSummary && (
+        <View style={styles.diagnosisSummaryContainer}>
+          <View style={styles.diagnosisSummaryHeader}>
+            <Text style={styles.diagnosisSummaryTitle}>Diagnosis Summary</Text>
+            <TouchableOpacity 
+              onPress={handleHideDiagnosisSummary}
+              style={styles.closeSummaryButton}
+            >
+              <Text style={styles.closeSummaryButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+          <TeethDiagnosisSummary 
+            diagnosisData={diagnosisData}
+            onEditTooth={() => {}} // You can implement edit functionality if needed
+          />
+        </View>
+      )}
+
       {/* UI controls outside the Canvas - memoized */}
       {Controls}
 
       {/* Instructions - memoized */}
       {Instructions}
+      
+      {/* Diagnosis Selection Modal */}
+      <DiagnosisSelectionModal
+        visible={diagnosisModalVisible}
+        onClose={() => setDiagnosisModalVisible(false)}
+        onSelect={handleDiagnosisSelect}
+        selectedTeeth={selectedTeeth}
+        colorMode={selectedColorMode}
+      />
       
       {/* Confirmation Modal */}
       <TeethConfirmationModal
@@ -518,5 +707,38 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  colorSelectionContainer: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 80, // Position below instructions
+  },
+  diagnosisSummaryContainer: {
+    position: "absolute",
+    bottom: 150,
+    left: 0,
+    right: 0,
+    maxHeight: 200,
+  },
+  diagnosisSummaryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    backgroundColor: 'white',
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+  },
+  diagnosisSummaryTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  closeSummaryButton: {
+    padding: 10,
+  },
+  closeSummaryButtonText: {
+    color: '#666',
   },
 });
